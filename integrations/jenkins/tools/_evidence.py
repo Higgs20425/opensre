@@ -9,6 +9,23 @@ from core.domain.types.evidence import record_evidence_entry
 _FAILED_BUILD_STATUSES = frozenset({"FAILURE"})
 _FAILED_JOB_STATUSES = frozenset({"FAILURE"})
 _FAILED_STAGE_STATUSES = frozenset({"FAILED"})
+#: A build that completed but whose tests failed. Not a hard failure, yet a
+#: summary that omits it reads as healthy, so it is cited beside the failures.
+_UNSTABLE_STATUS = "UNSTABLE"
+
+
+def _count_with_status(items: list[dict[str, Any]], statuses: frozenset[str] | str) -> int:
+    wanted = frozenset({statuses}) if isinstance(statuses, str) else statuses
+    return sum(1 for item in items if str(item.get("status", "")).upper() in wanted)
+
+
+def _unstable_suffix(items: list[dict[str, Any]], truncated: bool) -> str:
+    """Return ``", N unstable"`` when any item is unstable, else an empty string."""
+    unstable = _count_with_status(items, _UNSTABLE_STATUS)
+    if not unstable:
+        return ""
+    return f", {unstable}+ unstable" if truncated else f", {unstable} unstable"
+
 
 #: The client's own hard ceiling on how many builds it will ever fetch or
 #: return in one call (``max(1, min(limit, 50))`` for the unfiltered path).
@@ -50,11 +67,10 @@ def map_list_jenkins_builds(
         effective_limit = min(max(requested_limit, 1), _JENKINS_BUILD_FETCH_CAP)
         truncated = total >= effective_limit
         total_label = f"{total}+" if truncated else str(total)
-        failed = sum(
-            1 for b in builds if str(b.get("status", "")).upper() in _FAILED_BUILD_STATUSES
-        )
+        failed = _count_with_status(builds, _FAILED_BUILD_STATUSES)
         failed_label = f"{failed}+" if truncated else str(failed)
         summary = f"{total_label} build(s), {failed_label} failed"
+        summary += _unstable_suffix(builds, truncated)
     job = output.get("job")
     if job:
         summary += f" for '{job}'"
@@ -103,7 +119,7 @@ def map_get_jenkins_pipeline_stages(
     stages = output.get("stages") or []
     if not stages:
         return
-    failed = sum(1 for s in stages if str(s.get("status", "")).upper() in _FAILED_STAGE_STATUSES)
+    failed = _count_with_status(stages, _FAILED_STAGE_STATUSES)
     summary = f"{len(stages)} stage(s), {failed} failed"
     status = output.get("status")
     if status:
@@ -140,13 +156,13 @@ def map_list_jenkins_jobs(
         return
     total = output.get("total", len(jobs))
     total_label = f"{total}+" if truncated else str(total)
-    failing = sum(1 for j in jobs if str(j.get("status", "")).upper() in _FAILED_JOB_STATUSES)
+    failing = _count_with_status(jobs, _FAILED_JOB_STATUSES)
     failing_label = f"{failing}+" if truncated else str(failing)
     record_evidence_entry(
         evidence,
         source="list_jenkins_jobs",
         label="Jenkins Jobs",
-        summary=f"{total_label} job(s), {failing_label} failing",
+        summary=f"{total_label} job(s), {failing_label} failing{_unstable_suffix(jobs, truncated)}",
     )
 
 

@@ -8,6 +8,7 @@ Credentials come from the user's Jenkins integration stored locally or via env v
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime
 from http import HTTPStatus
 from typing import Any
@@ -29,6 +30,16 @@ _MAX_JOBS = 200
 # Jenkins folders nest jobs; descend this many levels when discovering jobs.
 # Realistic folder hierarchies are 1-3 deep, so this comfortably covers them.
 _MAX_FOLDER_DEPTH = 10
+# Every call is an idempotent GET, so a failure that never reached a healthy
+# Jenkins is safe to repeat. Timeouts are deliberately not retried: a slow
+# controller is usually an overloaded one, and repeating a heavy tree query
+# would add load while tripling the wait.
+_MAX_RETRIES = 2
+_RETRY_BACKOFF_SECONDS = 0.5
+_RETRYABLE_STATUS_CODES = frozenset(
+    {HTTPStatus.BAD_GATEWAY, HTTPStatus.SERVICE_UNAVAILABLE, HTTPStatus.GATEWAY_TIMEOUT}
+)
+_RETRYABLE_ERRORS = (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError)
 
 # Jenkins encodes a job's last-build status in a "color" field (a legacy ball-color scheme).
 _COLOR_STATUS = {
@@ -233,6 +244,26 @@ class JenkinsClient:
     def __exit__(self, *_: object) -> None:
         self.close()
 
+    def _get(self, path: str, params: dict[str, str] | None = None) -> httpx.Response:
+        """GET ``path``, retrying connection drops and 502/503/504 with backoff.
+
+        Returns the last response without raising for status, so callers keep
+        their own handling of 404 and other non-retryable codes.
+        """
+        for attempt in range(_MAX_RETRIES):
+            try:
+                resp = self._get_client().get(path, params=params)
+            except _RETRYABLE_ERRORS as exc:
+                logger.warning("[jenkins] GET %s failed; retrying: %s", path, exc)
+            else:
+                if resp.status_code not in _RETRYABLE_STATUS_CODES:
+                    return resp
+                logger.warning(
+                    "[jenkins] GET %s returned HTTP %s; retrying", path, resp.status_code
+                )
+            time.sleep(_RETRY_BACKOFF_SECONDS * 2**attempt)
+        return self._get_client().get(path, params=params)
+
     def list_builds(
         self,
         job_name: str,
@@ -255,9 +286,7 @@ class JenkinsClient:
         fetch_count = 50 if status else max(1, min(limit, 50))
         tree = f"builds[number,result,timestamp,duration,url,building]{{0,{fetch_count}}}"
         try:
-            resp = self._get_client().get(
-                f"/{_job_api_path(safe_name)}/api/json", params={"tree": tree}
-            )
+            resp = self._get(f"/{_job_api_path(safe_name)}/api/json", params={"tree": tree})
             resp.raise_for_status()
             data = _as_dict(resp.json())
             builds = [_shape_build(safe_name, b) for b in _as_dict_list(data.get("builds"))]
@@ -266,11 +295,13 @@ class JenkinsClient:
                 builds = [b for b in builds if b["status"] == wanted]
             builds = builds[: max(1, min(limit, 50))]
             failed = [b for b in builds if b["status"] == "FAILURE"]
+            unstable = [b for b in builds if b["status"] == "UNSTABLE"]
             return {
                 "success": True,
                 "job": safe_name,
                 "builds": builds,
                 "failed_builds": failed,
+                "unstable_builds": unstable,
                 "total": len(builds),
             }
         except Exception as exc:
@@ -291,7 +322,7 @@ class JenkinsClient:
             return {"success": False, "error": "invalid build number"}
 
         try:
-            resp = self._get_client().get(f"/{_job_api_path(safe_name)}/{number}/consoleText")
+            resp = self._get(f"/{_job_api_path(safe_name)}/{number}/consoleText")
             resp.raise_for_status()
             text = resp.text
             truncated = len(text) > max_chars
@@ -312,7 +343,9 @@ class JenkinsClient:
 
         Freestyle jobs (and servers without the Pipeline Stage View plugin) have
         no stages: those return ``is_pipeline=False`` with an empty stage list
-        rather than an error.
+        rather than an error. The Stage View endpoint answers 404 for those and
+        for a job or build that does not exist, so a 404 is confirmed against
+        the build itself before it is reported as "not a pipeline".
         """
         safe_name = _safe_job_name(job_name)
         if not safe_name:
@@ -322,9 +355,17 @@ class JenkinsClient:
             return {"success": False, "error": "invalid build number"}
 
         try:
-            resp = self._get_client().get(f"/{_job_api_path(safe_name)}/{number}/wfapi/describe")
+            build_path = f"/{_job_api_path(safe_name)}/{number}"
+            resp = self._get(f"{build_path}/wfapi/describe")
             if resp.status_code == HTTPStatus.NOT_FOUND:
-                # Not a Pipeline job, or the Stage View plugin is absent.
+                build_resp = self._get(f"{build_path}/api/json", params={"tree": "number"})
+                if build_resp.status_code == HTTPStatus.NOT_FOUND:
+                    return {
+                        "success": False,
+                        "error": f"build #{number} of job '{safe_name}' not found",
+                    }
+                build_resp.raise_for_status()
+                # The build exists: not a Pipeline job, or the Stage View plugin is absent.
                 return {
                     "success": True,
                     "job": safe_name,
@@ -356,7 +397,7 @@ class JenkinsClient:
         leaf = "name,url,color,lastBuild[number,result,timestamp,url]"
         tree = _nested_jobs_tree(leaf, _MAX_FOLDER_DEPTH)
         try:
-            resp = self._get_client().get("/api/json", params={"tree": tree})
+            resp = self._get("/api/json", params={"tree": tree})
             resp.raise_for_status()
             data = _as_dict(resp.json())
             flat, depth_truncated = _flatten_jobs(
@@ -396,7 +437,7 @@ class JenkinsClient:
         leaf = "name,builds[number,building,result,timestamp,url]{0,5}"
         tree = _nested_jobs_tree(leaf, _MAX_FOLDER_DEPTH)
         try:
-            resp = self._get_client().get("/api/json", params={"tree": tree})
+            resp = self._get("/api/json", params={"tree": tree})
             resp.raise_for_status()
             data = _as_dict(resp.json())
             flat, depth_truncated = _flatten_jobs(

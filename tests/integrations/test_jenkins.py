@@ -20,6 +20,7 @@ from integrations.jenkins import (
     jenkins_config_from_env,
     validate_jenkins_config,
 )
+from integrations.jenkins import client as client_module
 from integrations.jenkins.client import (
     JenkinsClient,
     _flatten_jobs,
@@ -373,11 +374,25 @@ class TestGetPipelineStages:
         assert result["stages"][1]["status"] == "FAILED"
 
     def test_freestyle_404_returns_empty_not_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        client = _client_with_handler(lambda _: httpx.Response(404, text="Not Found"), monkeypatch)
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/wfapi/describe"):
+                return httpx.Response(404, text="Not Found")
+            assert request.url.path == "/job/demo-fail/4/api/json"
+            return httpx.Response(200, json={"number": 4})
+
+        client = _client_with_handler(handler, monkeypatch)
         result = client.get_pipeline_stages("demo-fail", 4)
         assert result["success"] is True
         assert result["is_pipeline"] is False
         assert result["stages"] == []
+
+    def test_missing_build_is_an_error_not_a_freestyle_job(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = _client_with_handler(lambda _: httpx.Response(404, text="Not Found"), monkeypatch)
+        result = client.get_pipeline_stages("no-such-job", 4)
+        assert result["success"] is False
+        assert "not found" in result["error"]
 
     def test_invalid_build_number(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = _client_with_handler(lambda _: httpx.Response(200, json={}), monkeypatch)
@@ -551,6 +566,62 @@ class TestListRunningBuilds:
         assert result["total"] == 1
         assert result["running_builds"][0]["job"] == "team/deploy"
         assert result["running_builds"][0]["number"] == 9
+
+
+class TestRetries:
+    @pytest.fixture(autouse=True)
+    def _no_backoff(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(client_module.time, "sleep", lambda _seconds: None)
+
+    def test_recovers_from_transient_failures(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        outcomes: list[httpx.Response | Exception] = [
+            httpx.ConnectError("connection refused"),
+            httpx.Response(503, text="Jenkins is getting ready"),
+            httpx.Response(200, json={"jobs": [{"name": "deploy", "color": "red"}]}),
+        ]
+
+        def handler(_: httpx.Request) -> httpx.Response:
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        client = _client_with_handler(handler, monkeypatch)
+        result = client.list_jobs()
+        assert result["success"] is True
+        assert [job["name"] for job in result["jobs"]] == ["deploy"]
+        assert outcomes == []
+
+    def test_gives_up_after_bounded_attempts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            return httpx.Response(503, text="still starting")
+
+        client = _client_with_handler(handler, monkeypatch)
+        result = client.list_jobs()
+        assert result["success"] is False
+        assert "HTTP 503" in result["error"]
+        assert len(calls) == client_module._MAX_RETRIES + 1
+
+    def test_does_not_retry_timeouts_or_client_errors(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+
+        def timing_out(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            raise httpx.ReadTimeout("jenkins timed out")
+
+        assert not _client_with_handler(timing_out, monkeypatch).list_jobs()["success"]
+
+        def unauthorized(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            return httpx.Response(401, text="bad token")
+
+        assert not _client_with_handler(unauthorized, monkeypatch).list_jobs()["success"]
+        assert len(calls) == 2
 
 
 class TestClientErrorPaths:

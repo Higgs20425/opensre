@@ -307,3 +307,40 @@ def test_map_list_jenkins_running_builds_cites_empty_result_when_truncated() -> 
     entries = evidence["catalog_entries"]
     assert len(entries) == 1
     assert entries[0]["summary"] == "0+ build(s) currently running"
+
+
+def test_map_list_jenkins_builds_cites_unstable_builds() -> None:
+    evidence: dict[str, Any] = {}
+    map_list_jenkins_builds(
+        evidence,
+        {
+            "available": True,
+            "job": "unit-tests",
+            "builds": [
+                {"number": 9, "status": "UNSTABLE"},
+                {"number": 8, "status": "SUCCESS"},
+            ],
+            "total": 2,
+        },
+        {"limit": 10},
+    )
+    summary = evidence["catalog_entries"][0]["summary"]
+    assert summary == "2 build(s), 0 failed, 1 unstable for 'unit-tests'"
+
+
+def test_map_list_jenkins_jobs_cites_unstable_jobs() -> None:
+    evidence: dict[str, Any] = {}
+    map_list_jenkins_jobs(
+        evidence,
+        {
+            "available": True,
+            "jobs": [
+                {"name": "job-a", "status": "UNSTABLE"},
+                {"name": "job-b", "status": "FAILURE"},
+            ],
+            "total": 2,
+            "truncated": True,
+        },
+        {},
+    )
+    assert evidence["catalog_entries"][0]["summary"] == "2+ job(s), 1+ failing, 1+ unstable"

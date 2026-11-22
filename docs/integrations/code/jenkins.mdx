@@ -165,7 +165,7 @@ unset JENKINS_URL JENKINS_USER JENKINS_API_TOKEN OPENSRE_INTEGRATIONS_STORE_PATH
 
 | Tool | What it does |
 | --- | --- |
-| `list_jenkins_builds` | Recent builds for a job with status (SUCCESS / FAILURE / RUNNING / ABORTED) and timestamp |
+| `list_jenkins_builds` | Recent builds for a job with status (SUCCESS / FAILURE / UNSTABLE / RUNNING / ABORTED) and timestamp |
 | `get_jenkins_build_log` | Console log for a specific build — the failing step or error |
 | `get_jenkins_pipeline_stages` | Per-stage status and duration for a Pipeline build (empty for freestyle jobs) |
 | `list_jenkins_jobs` | All jobs with their last-build status |
@@ -213,6 +213,7 @@ Jenkins connectivity successful at http://localhost:8080 (node: built-in)
 | `HTTP 403` on verify | The user lacks Overall/Read permission, or CSRF/crumb settings block the token. |
 | No builds returned | Confirm the job name is correct and has at least one build. |
 | Pipeline stages empty | Freestyle jobs have no Stage View data — use console logs instead. |
+| `build #N of job '...' not found` | The job path or build number does not exist. Check both; folder jobs need the full path. |
 
 ## Security
 

@@ -111,7 +111,7 @@ def _list_jenkins_builds_extract_params(sources: dict[str, dict]) -> dict[str, A
             "status": {
                 "type": "string",
                 "default": "",
-                "description": "Optional filter: SUCCESS, FAILURE, RUNNING, ABORTED",
+                "description": "Optional filter: SUCCESS, FAILURE, UNSTABLE, RUNNING, ABORTED",
             },
             "jenkins_url": {"type": "string"},
             "jenkins_user": {"type": "string"},
@@ -122,6 +122,7 @@ def _list_jenkins_builds_extract_params(sources: dict[str, dict]) -> dict[str, A
     outputs={
         "builds": "Recent builds with status, timestamp, duration, and url",
         "failed_builds": "Subset of builds in FAILURE state",
+        "unstable_builds": "Subset of builds in UNSTABLE state (completed with failing tests)",
     },
     is_available=_jenkins_available,
     extract_params=_list_jenkins_builds_extract_params,
@@ -150,6 +151,7 @@ def list_jenkins_builds(
         "job": result.get("job", job_name),
         "builds": result.get("builds", []),
         "failed_builds": result.get("failed_builds", []),
+        "unstable_builds": result.get("unstable_builds", []),
         "total": result.get("total", 0),
     }
 
