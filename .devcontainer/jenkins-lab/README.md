@@ -18,8 +18,8 @@ Needs Docker running (Docker Desktop on Windows and macOS) plus `bash` and
 
 Add `--with-plugins` to also install the Folders and Pipeline plugins and seed a
 folder job and a Pipeline job. Re-running `up.sh` recreates the container from
-scratch; `--seed-only` configures a Jenkins started by Compose instead (see
-below). Jenkins starts unsecured for a few seconds until the script enables
+scratch, unless Compose started it (see below): then the script keeps the
+container and only configures it. Jenkins starts unsecured for a few seconds until the script enables
 the login.
 
 Open http://localhost:8090 in a browser (in Codespaces, use the **Ports** tab).
@@ -31,7 +31,7 @@ the freshly started Jenkins:
 
 ```bash
 docker compose -f .devcontainer/jenkins-lab/compose.yaml up -d --build
-.devcontainer/jenkins-lab/up.sh --seed-only
+.devcontainer/jenkins-lab/up.sh
 docker compose -f .devcontainer/jenkins-lab/compose.yaml exec opensre bash
 ```
 
@@ -51,8 +51,9 @@ network, and the lab login is preset in its environment, so
   `opensre integrations setup jenkins` (`http://jenkins:8080`, `admin`,
   `admin`). `opensre ask` ignores integrations from environment variables once
   the local store has an entry, while `integrations verify` still passes.
-- `--seed-only` expects a Jenkins that has just started. To reseed, run `down`,
-  then the commands above again. `--with-plugins` can be combined with it.
+- `up.sh` detects the Compose-managed Jenkins and configures it once; run again,
+  it reports that Jenkins is already set up and changes nothing. To reseed, run
+  `down`, then the commands above again. `--with-plugins` works here too.
 
 ## Run OpenSRE against it from the host
 

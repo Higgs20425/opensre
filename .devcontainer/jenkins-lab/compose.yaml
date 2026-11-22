@@ -1,7 +1,7 @@
 # Jenkins lab with OpenSRE in its own container instead of on the host.
 #
 #   docker compose -f .devcontainer/jenkins-lab/compose.yaml up -d --build
-#   .devcontainer/jenkins-lab/up.sh --seed-only
+#   .devcontainer/jenkins-lab/up.sh
 #
 # The opensre service has no published ports and no host mounts: it reaches
 # Jenkins over the lab network only, and everything it stores (sign-ins,

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Start a disposable Jenkins with seeded jobs for exercising the OpenSRE
-# Jenkins integration. Usage: up.sh [--with-plugins] [--seed-only]
-# --seed-only configures a freshly started Jenkins that something else created
-# (compose.yaml) instead of recreating the container here.
+# Jenkins integration. Usage: up.sh [--with-plugins]
+# A Jenkins started by compose.yaml is kept and only configured; otherwise the
+# container is recreated here.
 set -euo pipefail
 
 readonly LAB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,6 +38,33 @@ wait_until_ready() {
   local curl_fn="$1" attempt
   for ((attempt = 1; attempt <= READY_ATTEMPTS; attempt++)); do
     if "${curl_fn}" --fail --output /dev/null "${URL}/api/json" 2>/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "ERROR: Jenkins did not become ready at ${URL}" >&2
+  docker logs --tail 20 "${CONTAINER}" >&2
+  return 1
+}
+
+# Compose owns the container's network, so recreating the container here would
+# cut it off from the OpenSRE service.
+started_by_compose() {
+  local project
+  project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' \
+    "${CONTAINER}" 2>/dev/null || true)"
+  [[ -n "${project}" ]]
+}
+
+# Print the first settled anonymous API status: 200 while Jenkins is still
+# unsecured, 403 once the lab login is enabled.
+wait_for_anonymous_status() {
+  local attempt status
+  for ((attempt = 1; attempt <= READY_ATTEMPTS; attempt++)); do
+    status="$(anonymous_curl --output /dev/null --write-out '%{http_code}' \
+      "${URL}/api/json" 2>/dev/null || true)"
+    if [[ "${status}" == "200" || "${status}" == "403" ]]; then
+      echo "${status}"
       return 0
     fi
     sleep 2
@@ -129,20 +156,24 @@ seed_plugin_jobs() {
 }
 
 main() {
-  local with_plugins="false" seed_only="false" arg
+  local with_plugins="false" arg status
   for arg in "$@"; do
     case "${arg}" in
       --with-plugins) with_plugins="true" ;;
-      --seed-only) seed_only="true" ;;
       *)
-        echo "Usage: up.sh [--with-plugins] [--seed-only]" >&2
+        echo "Usage: up.sh [--with-plugins]" >&2
         return 2
         ;;
     esac
   done
 
-  if [[ "${seed_only}" == "true" ]]; then
-    wait_until_ready anonymous_curl
+  if started_by_compose; then
+    status="$(wait_for_anonymous_status)"
+    if [[ "${status}" == "403" ]]; then
+      echo "Jenkins at ${URL} is already set up (login: admin / admin); nothing to do."
+      echo "To start over, run 'docker compose down' and 'up -d' for the lab, then this script."
+      return 0
+    fi
   else
     start_jenkins
   fi
