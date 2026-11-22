@@ -20,9 +20,14 @@
     "PYTHONUTF8": "1"
   },
   "forwardPorts": [
-    8000
+    8000,
+    8090
   ],
   "portsAttributes": {
+    "8090": {
+      "label": "Jenkins lab",
+      "onAutoForward": "notify"
+    },
     "8000": {
       "label": "OpenSRE health app",
       "onAutoForward": "notify"
