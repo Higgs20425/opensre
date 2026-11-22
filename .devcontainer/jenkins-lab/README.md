@@ -18,12 +18,43 @@ Needs Docker running (Docker Desktop on Windows and macOS) plus `bash` and
 
 Add `--with-plugins` to also install the Folders and Pipeline plugins and seed a
 folder job and a Pipeline job. Re-running `up.sh` recreates the container from
-scratch. Jenkins starts unsecured for a few seconds until the script enables
+scratch; `--seed-only` configures a Jenkins started by Compose instead (see
+below). Jenkins starts unsecured for a few seconds until the script enables
 the login.
 
 Open http://localhost:8090 in a browser (in Codespaces, use the **Ports** tab).
 
-## Run OpenSRE against it
+## Run OpenSRE in a container
+
+To keep OpenSRE off the host, start both services with Compose and configure
+the freshly started Jenkins:
+
+```bash
+docker compose -f .devcontainer/jenkins-lab/compose.yaml up -d --build
+.devcontainer/jenkins-lab/up.sh --seed-only
+docker compose -f .devcontainer/jenkins-lab/compose.yaml exec opensre bash
+```
+
+The `opensre` container runs this checkout's code with no host mounts and no
+published ports. It reaches Jenkins at `http://jenkins:8080` over the lab
+network, and the lab login is preset in its environment, so
+`opensre integrations verify jenkins` works as soon as Jenkins is seeded.
+
+- Model: run `claude`, sign in with `/login`, then
+  `export LLM_PROVIDER=claude-code`. To leave the Claude Code CLI out, run
+  `docker compose -f .devcontainer/jenkins-lab/compose.yaml build --build-arg INSTALL_CLAUDE_CODE=false`
+  before `up`.
+- Anything entered inside the container (model sign-in,
+  `opensre integrations setup ...`) stays there. `stop` and `start` keep it;
+  `down` deletes it with the container.
+- After saving any integration with `opensre integrations setup`, also run
+  `opensre integrations setup jenkins` (`http://jenkins:8080`, `admin`,
+  `admin`). `opensre ask` ignores integrations from environment variables once
+  the local store has an entry, while `integrations verify` still passes.
+- `--seed-only` expects a Jenkins that has just started. To reseed, run `down`,
+  then the commands above again. `--with-plugins` can be combined with it.
+
+## Run OpenSRE against it from the host
 
 From the repository root, install once with `make install`, then:
 
@@ -70,14 +101,14 @@ tests in `tests/integrations/test_jenkins.py` and
 - UNSTABLE builds and jobs are returned and cited in evidence summaries.
 - Connection drops and HTTP 502/503/504 are retried; timeouts are not.
 
-Verified against a live Jenkins for freestyle jobs only. Still open:
+Verified against a live Jenkins for freestyle, folder and Pipeline jobs,
+including `--with-plugins` and both plugin-backed jobs. Still open:
 
-- `--with-plugins` and the two plugin-backed jobs have never been run; the
-  environment they were written in could not reach the Jenkins update site.
-- `up.sh` has only been run on Linux. Git Bash, WSL and Codespaces are untested.
-- Folder, Pipeline and Multibranch behavior is unverified against a live
-  server. Branch names containing `/` are stored as `feature%2Ffoo` and may 404
-  because `_job_api_path` does not re-encode them.
+- `up.sh` and `compose.yaml` have been run on Linux and on Git Bash with Docker
+  Desktop for Windows. WSL and Codespaces are untested.
+- Multibranch behavior is unverified against a live server. Branch names
+  containing `/` are stored as `feature%2Ffoo` and may 404 because
+  `_job_api_path` does not re-encode them.
 - `get_build_log` loads the whole console log before keeping the tail
   (measured: 258 MB peak for the 86 MB `big-log`).
 - `list_jobs` and `list_running_builds` fetch the full job tree in one request

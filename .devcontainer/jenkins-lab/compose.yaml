@@ -1,0 +1,46 @@
+# Jenkins lab with OpenSRE in its own container instead of on the host.
+#
+#   docker compose -f .devcontainer/jenkins-lab/compose.yaml up -d --build
+#   .devcontainer/jenkins-lab/up.sh --seed-only
+#
+# The opensre service has no published ports and no host mounts: it reaches
+# Jenkins over the lab network only, and everything it stores (sign-ins,
+# integration credentials, session logs) lives in the container and is deleted
+# by `docker compose down`. Nothing here reads a host .env file.
+name: opensre-jenkins-lab
+
+services:
+  jenkins:
+    image: jenkins/jenkins:lts-jdk21
+    # up.sh addresses the container by this name.
+    container_name: jenkins-dev
+    environment:
+      JAVA_OPTS: -Djenkins.install.runSetupWizard=false
+    # Jenkins admin can run arbitrary code: publish on loopback only.
+    ports:
+      - "${JENKINS_LAB_BIND:-127.0.0.1}:${JENKINS_LAB_PORT:-8090}:8080"
+    networks:
+      - lab
+
+  opensre:
+    build:
+      context: ../..
+      dockerfile: .devcontainer/jenkins-lab/Dockerfile
+    image: opensre-jenkins-lab:local
+    container_name: opensre-dev
+    # Lab-only login created by basic-security.groovy; not a real credential.
+    environment:
+      JENKINS_URL: http://jenkins:8080
+      JENKINS_USER: admin
+      JENKINS_API_TOKEN: admin
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - jenkins
+    networks:
+      - lab
+
+networks:
+  lab: {}

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Start a disposable Jenkins with seeded jobs for exercising the OpenSRE
-# Jenkins integration. Usage: up.sh [--with-plugins]
+# Jenkins integration. Usage: up.sh [--with-plugins] [--seed-only]
+# --seed-only configures a freshly started Jenkins that something else created
+# (compose.yaml) instead of recreating the container here.
 set -euo pipefail
 
 readonly LAB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -127,10 +129,23 @@ seed_plugin_jobs() {
 }
 
 main() {
-  local with_plugins="false"
-  [[ "${1:-}" == "--with-plugins" ]] && with_plugins="true"
+  local with_plugins="false" seed_only="false" arg
+  for arg in "$@"; do
+    case "${arg}" in
+      --with-plugins) with_plugins="true" ;;
+      --seed-only) seed_only="true" ;;
+      *)
+        echo "Usage: up.sh [--with-plugins] [--seed-only]" >&2
+        return 2
+        ;;
+    esac
+  done
 
-  start_jenkins
+  if [[ "${seed_only}" == "true" ]]; then
+    wait_until_ready anonymous_curl
+  else
+    start_jenkins
+  fi
   enable_security
   [[ "${with_plugins}" == "true" ]] && install_plugins
   CRUMB="$(crumb jenkins_curl)"
