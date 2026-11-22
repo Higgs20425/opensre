@@ -2,7 +2,9 @@
 
 A disposable Jenkins for exercising the OpenSRE Jenkins integration, meant for
 GitHub Codespaces or the dev container. Lab only: the login is `admin` /
-`admin`, so keep the forwarded port **private**.
+`admin` and a Jenkins admin can run arbitrary code, so keep the forwarded port
+**private** and never expose it publicly. Outside Codespaces the port is
+published on `127.0.0.1` only; set `JENKINS_LAB_BIND` to override.
 
 ## Start
 

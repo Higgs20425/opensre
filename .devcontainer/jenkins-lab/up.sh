@@ -7,6 +7,15 @@ readonly LAB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly CONTAINER="jenkins-dev"
 readonly IMAGE="jenkins/jenkins:lts-jdk21"
 readonly PORT="${JENKINS_LAB_PORT:-8090}"
+# Jenkins admin can run arbitrary code, so publish on loopback only. Codespaces
+# is the exception: its port forwarder needs the port on the VM's interfaces,
+# and the VM is reachable only through forwarded ports, which default to private.
+if [[ "${CODESPACES:-}" == "true" ]]; then
+  readonly DEFAULT_BIND_ADDRESS="0.0.0.0"
+else
+  readonly DEFAULT_BIND_ADDRESS="127.0.0.1"
+fi
+readonly BIND_ADDRESS="${JENKINS_LAB_BIND:-${DEFAULT_BIND_ADDRESS}}"
 readonly URL="http://127.0.0.1:${PORT}"
 readonly AUTH="admin:admin"
 readonly COOKIES="$(mktemp)"
@@ -33,7 +42,7 @@ wait_until_ready() {
 
 start_jenkins() {
   docker rm --force "${CONTAINER}" >/dev/null 2>&1 || true
-  docker create --name "${CONTAINER}" --publish "${PORT}:8080" \
+  docker create --name "${CONTAINER}" --publish "${BIND_ADDRESS}:${PORT}:8080" \
     --env JAVA_OPTS="-Djenkins.install.runSetupWizard=false" "${IMAGE}" >/dev/null
   # Copied rather than bind-mounted: with docker-outside-of-docker a bind
   # mount resolves on the Docker host, not inside the dev container.
