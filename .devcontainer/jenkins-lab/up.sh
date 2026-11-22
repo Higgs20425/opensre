@@ -23,14 +23,19 @@ readonly READY_ATTEMPTS=90
 readonly PLUGINS=(cloudbees-folder workflow-aggregator pipeline-stage-view)
 trap 'rm -f "${COOKIES}"' EXIT
 
-jenkins_curl() {
-  curl --silent --show-error --noproxy '*' --user "${AUTH}" "$@"
+anonymous_curl() {
+  curl --silent --show-error --noproxy '*' "$@"
 }
 
+jenkins_curl() {
+  anonymous_curl --user "${AUTH}" "$@"
+}
+
+# wait_until_ready <curl-function>: poll with the given credentials mode.
 wait_until_ready() {
-  local attempt
+  local curl_fn="$1" attempt
   for ((attempt = 1; attempt <= READY_ATTEMPTS; attempt++)); do
-    if jenkins_curl --fail --output /dev/null "${URL}/api/json" 2>/dev/null; then
+    if "${curl_fn}" --fail --output /dev/null "${URL}/api/json" 2>/dev/null; then
       return 0
     fi
     sleep 2
@@ -44,23 +49,34 @@ start_jenkins() {
   docker rm --force "${CONTAINER}" >/dev/null 2>&1 || true
   docker create --name "${CONTAINER}" --publish "${BIND_ADDRESS}:${PORT}:8080" \
     --env JAVA_OPTS="-Djenkins.install.runSetupWizard=false" "${IMAGE}" >/dev/null
-  # Copied rather than bind-mounted: with docker-outside-of-docker a bind
-  # mount resolves on the Docker host, not inside the dev container.
-  docker cp "${LAB_DIR}/basic-security.groovy" \
-    "${CONTAINER}:/usr/share/jenkins/ref/init.groovy.d/basic-security.groovy"
   docker start "${CONTAINER}" >/dev/null
-  wait_until_ready
+  wait_until_ready anonymous_curl
+}
+
+# Jenkins boots with security off, so the script console accepts the setup
+# script anonymously. Sent over HTTP from stdin instead of copied or mounted
+# into the container: no host path reaches Docker, which keeps this working
+# with docker-outside-of-docker and with Git Bash path conversion on Windows.
+enable_security() {
+  local bootstrap_crumb
+  bootstrap_crumb="$(crumb anonymous_curl)"
+  anonymous_curl --fail --output /dev/null --cookie "${COOKIES}" \
+    --header "Jenkins-Crumb: ${bootstrap_crumb}" \
+    --data-urlencode "script@-" "${URL}/scriptText" <"${LAB_DIR}/basic-security.groovy"
+  wait_until_ready jenkins_curl
 }
 
 install_plugins() {
   docker exec "${CONTAINER}" jenkins-plugin-cli --plugins "${PLUGINS[@]}"
   docker restart "${CONTAINER}" >/dev/null
-  wait_until_ready
+  wait_until_ready jenkins_curl
 }
 
+# crumb <curl-function>: print a CSRF crumb and keep its session cookie.
 crumb() {
-  jenkins_curl --cookie-jar "${COOKIES}" "${URL}/crumbIssuer/api/json" |
-    python3 -c 'import json, sys; print(json.load(sys.stdin)["crumb"])'
+  local curl_fn="$1"
+  "${curl_fn}" --cookie-jar "${COOKIES}" "${URL}/crumbIssuer/api/json" |
+    sed -n 's/.*"crumb":"\([^"]*\)".*/\1/p'
 }
 
 # create_item <parent-path> <name> <config-xml>, e.g. create_item "" deploy-ok "<project/>"
@@ -115,8 +131,9 @@ main() {
   [[ "${1:-}" == "--with-plugins" ]] && with_plugins="true"
 
   start_jenkins
+  enable_security
   [[ "${with_plugins}" == "true" ]] && install_plugins
-  CRUMB="$(crumb)"
+  CRUMB="$(crumb jenkins_curl)"
   seed_freestyle_jobs
   [[ "${with_plugins}" == "true" ]] && seed_plugin_jobs
 

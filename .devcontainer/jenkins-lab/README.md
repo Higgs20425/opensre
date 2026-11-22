@@ -1,12 +1,16 @@
 # Jenkins lab
 
-A disposable Jenkins for exercising the OpenSRE Jenkins integration, meant for
-GitHub Codespaces or the dev container. Lab only: the login is `admin` /
-`admin` and a Jenkins admin can run arbitrary code, so keep the forwarded port
-**private** and never expose it publicly. Outside Codespaces the port is
-published on `127.0.0.1` only; set `JENKINS_LAB_BIND` to override.
+A disposable Jenkins for exercising the OpenSRE Jenkins integration, on a local
+machine with Docker or in GitHub Codespaces. Lab only: the login is `admin` /
+`admin` and a Jenkins admin can run arbitrary code, so never expose the port
+publicly. Outside Codespaces it is published on `127.0.0.1` only; set
+`JENKINS_LAB_BIND` to override. In Codespaces keep the forwarded port
+**private**.
 
 ## Start
+
+Needs Docker running (Docker Desktop on Windows and macOS) plus `bash` and
+`curl`. On Windows run it from Git Bash or WSL.
 
 ```bash
 .devcontainer/jenkins-lab/up.sh
@@ -14,24 +18,35 @@ published on `127.0.0.1` only; set `JENKINS_LAB_BIND` to override.
 
 Add `--with-plugins` to also install the Folders and Pipeline plugins and seed a
 folder job and a Pipeline job. Re-running `up.sh` recreates the container from
-scratch.
+scratch. Jenkins starts unsecured for a few seconds until the script enables
+the login.
 
-Open Jenkins from the **Ports** tab (port 8090). Then point OpenSRE at it:
+Open http://localhost:8090 in a browser (in Codespaces, use the **Ports** tab).
+
+## Run OpenSRE against it
+
+From the repository root, install once with `make install`, then:
 
 ```bash
 export JENKINS_URL=http://127.0.0.1:8090 JENKINS_USER=admin JENKINS_API_TOKEN=admin
-opensre integrations verify jenkins
-opensre --json ask "Why did the latest build of deploy-fail fail? Put the evidence in your final answer."
+uv run opensre integrations verify jenkins
+uv run opensre --json ask "Why did the latest build of deploy-fail fail? Put the evidence in your final answer."
 ```
 
-OpenSRE needs a model. Either sign in with `opensre`, set an API key, or
-install Claude Code and use it as the provider:
+Without `--json`, `ask` prints only the closing summary of a multi-step
+investigation.
 
-```bash
-curl -fsSL https://claude.ai/install.sh | bash
-claude        # sign in once
-export LLM_PROVIDER=claude-code
-```
+OpenSRE needs a model. Sign in with `uv run opensre`, set an API key, or use an
+installed and signed-in Claude Code CLI with `export LLM_PROVIDER=claude-code`.
+Never commit a key: this repository is public.
+
+## Repository layout for this work
+
+- `origin` is the fork `Higgs20425/opensre`; upstream is `tracer-cloud/opensre`.
+- `jenkins-reliability-fixes` holds only the integration fixes, kept clean for
+  an upstream pull request. `jenkins-lab` adds this lab on top of it.
+- Put integration changes on `jenkins-reliability-fixes` and lab changes on
+  `jenkins-lab`. Do not put session URLs in commit messages.
 
 ## Seeded jobs
 
@@ -59,6 +74,7 @@ Verified against a live Jenkins for freestyle jobs only. Still open:
 
 - `--with-plugins` and the two plugin-backed jobs have never been run; the
   environment they were written in could not reach the Jenkins update site.
+- `up.sh` has only been run on Linux. Git Bash, WSL and Codespaces are untested.
 - Folder, Pipeline and Multibranch behavior is unverified against a live
   server. Branch names containing `/` are stored as `feature%2Ffoo` and may 404
   because `_job_api_path` does not re-encode them.
@@ -72,5 +88,5 @@ Verified against a live Jenkins for freestyle jobs only. Still open:
 Run the focused tests with:
 
 ```bash
-python -m pytest tests/integrations/test_jenkins.py tests/tools/test_jenkins_tools.py
+uv run python -m pytest tests/integrations/test_jenkins.py tests/tools/test_jenkins_tools.py
 ```
